@@ -6,17 +6,19 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct AddView: View {
     @State private var name = ""
     @State private var type = ExpenseType.personal
     @State private var amount = 0.0
+    @Environment(\.modelContext) var modelContext
     @Environment(\.dismiss) var dismiss
-    var expenses: Expenses
     
     var body: some View {
         Form {
             TextField("Expense Name", text: $name)
+                .autocorrectionDisabled()
             
             Picker("Type", selection: $type) {
                 ForEach(ExpenseType.allCases, id: \.self) {
@@ -26,17 +28,18 @@ struct AddView: View {
             
             TextField("Amount", value: $amount, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
                 .keyboardType(.decimalPad)
+                .autocorrectionDisabled()
             
             Button("Add") {
-                expenses.items.append(ExpenseItem(name: name, type: type, amount: amount))
+                modelContext.insert(ExpenseItem(name: name, type: type, amount: amount))
                 dismiss()
             }
+            .disabled(name.isEmpty)
         }
         .navigationTitle("Add new expense")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
-                    expenses.items.append(ExpenseItem(name: name, type: type, amount: amount))
                     dismiss()
                 }.foregroundStyle(.red)
             }
@@ -46,5 +49,13 @@ struct AddView: View {
 }
 
 #Preview {
-    AddView(expenses: Expenses())
+    do {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: ExpenseItem.self, configurations: config)
+        return AddView()
+            .modelContainer(container)
+    }
+    catch {
+        return Text("Could not create view: \(error.localizedDescription)")
+    }
 }

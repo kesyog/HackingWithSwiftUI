@@ -6,39 +6,42 @@
 //
 
 import SwiftUI
+import SwiftData
 
-enum ExpenseType: String, Codable, CaseIterable {
+enum ExpenseType: String, Hashable, Codable, CaseIterable {
     case personal, business
 }
 
-struct ExpenseItem: Identifiable, Codable, Equatable {
-    var id = UUID()
-    let name: String
-    let type: ExpenseType
-    let amount: Double
-}
-
-@Observable
-class Expenses {
-    var items: [ExpenseItem] {
-        didSet {
-            if let encoded = try? JSONEncoder().encode(items) {
-                UserDefaults.standard.set(encoded, forKey: "Items")
-                print("did set")
-            }
-        }
+@Model
+class ExpenseItem: Equatable {
+    var name: String
+    // Apparently need to store this as a string to be compatible with SwiftData Predicates
+    var type: String
+    var amount: Double
+    
+    init(name: String, type: ExpenseType, amount: Double) {
+        self.name = name
+        self.type = type.rawValue
+        self.amount = amount
     }
     
-    init() {
-        guard let savedItems = UserDefaults.standard.data(forKey: "Items") else {
-            items = []
-            return
+    enum SortOrder: String, CaseIterable {
+        case name, amount
+        
+        var descriptor: [SortDescriptor<ExpenseItem>] {
+            switch self {
+            case .name:
+                [
+                    SortDescriptor(\ExpenseItem.name),
+                    SortDescriptor(\ExpenseItem.amount, order: .reverse),
+                ]
+            case .amount:
+                [
+                    SortDescriptor(\ExpenseItem.amount, order: .reverse),
+                    SortDescriptor(\ExpenseItem.name),
+                ]
+            }
         }
-        guard let decodedItems = try? JSONDecoder().decode([ExpenseItem].self, from: savedItems) else {
-            items = []
-            return
-        }
-        items = decodedItems.filter { !$0.name.isEmpty }
     }
 }
 
@@ -52,42 +55,18 @@ func styleAmount(_ amount: Double) -> some ShapeStyle {
     }
 }
 
-extension Array where Element == ExpenseItem {
-    func filter(by typeFilter: ExpenseType) -> [ExpenseItem] {
-        self.filter { $0.type == typeFilter }
-    }
-    
-    mutating func removeFilteredItems(typeFilter: ExpenseType, atOffsets toRemove: IndexSet) {
-        var filteredItems = self.filter(by: typeFilter)
-        filteredItems.remove(atOffsets: toRemove)
-        self.removeAll { item in
-            item.type == typeFilter && !filteredItems.contains([item])
-        }
-    }
-}
-
 struct ContentView: View {
-    @State private var expenses = Expenses()
+    @Query private var expenses: [ExpenseItem]
     @State private var showingAddExpense = false
+    @Environment(\.modelContext) var modelContext
+    @State private var shownExpenseTypes = ExpenseType.allCases
+    @State private var sortOrder = ExpenseItem.SortOrder.name
     
     var body: some View {
         NavigationStack {
             List {
-                ForEach(ExpenseType.allCases, id: \.self) { expenseType in
-                    Section(expenseType.rawValue.capitalized) {
-                        ForEach(expenses.items.filter(by: expenseType)) { item in
-                            HStack {
-                                Text(item.name)
-                                    .font(.headline)
-                                Spacer()
-                                Text(item.amount, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
-                                    .foregroundStyle(styleAmount(item.amount))
-                            }
-                        }
-                        .onDelete(perform: { indexSet in
-                            expenses.items.removeFilteredItems(typeFilter: expenseType, atOffsets: indexSet)
-                        })
-                    }
+                ForEach(shownExpenseTypes, id: \.self) { expenseType in
+                    ExpenseList(expenseType: expenseType, sortOrder: sortOrder.descriptor)
                 }
             }
             .navigationTitle("iExpense")
@@ -95,14 +74,37 @@ struct ContentView: View {
                 NavigationLink(value: 0) {
                     Image(systemName: "plus")
                 }
+                Picker("Filter expense type", selection: $shownExpenseTypes) {
+                    ForEach(ExpenseType.allCases, id: \.self) { expenseType in
+                        Text(expenseType.rawValue.capitalized)
+                            .tag([expenseType])
+                    }
+                    Text("All")
+                        .tag(ExpenseType.allCases)
+                }
+                Menu("Sort", systemImage: "arrow.up.arrow.down") {
+                    Picker("Sort", selection: $sortOrder) {
+                        ForEach(ExpenseItem.SortOrder.allCases, id: \.self) {
+                            Text("Sort by \($0.rawValue.capitalized)")
+                        }
+                    }
+                }
             }
             .navigationDestination(for: Int.self) { i in
-                AddView(expenses: expenses)
+                AddView()
             }
         }
     }
 }
 
 #Preview {
-    ContentView()
+    do {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: ExpenseItem.self, configurations: config)
+        return ContentView()
+            .modelContainer(container)
+    }
+    catch {
+        return Text("Could not create view: \(error.localizedDescription)")
+    }
 }
